@@ -40,12 +40,12 @@ class PDFCropperApp:
         self.BORDER_COLOR = "#E0E0E0"
         
         # Data
-        self.invoice_files = []
-        self.valid_pairs = []
-        self.label_files = []
-        self.validated_labels = []
-        self.adc_file = None
-        self.adc_data = {}
+        self.invoice_files: list[str] = []
+        self.valid_pairs: list[tuple[str, str]] = []
+        self.label_files: list[str] = []
+        self.validated_labels: list[tuple] = []
+        self.adc_file: str | None = None
+        self.adc_data: dict[str, str] = {}
         
         self.setup_ui()
         
@@ -292,8 +292,17 @@ class PDFCropperApp:
         
         if self.valid_pairs:
             content.append({"text": "📄 Invoice Data:\n", "tag": "header"})
+            # Group lots by item for cleaner display
+            grouped_invoice: dict[str, list[str]] = {}
             for item, lot in self.valid_pairs:
-                content.append({"text": f"   Item: {item} → Lot: {lot}\n", "tag": "normal"})
+                if item not in grouped_invoice:
+                    grouped_invoice[item] = []
+                if lot not in grouped_invoice[item]:
+                    grouped_invoice[item].append(lot)
+            
+            for item, lots in grouped_invoice.items():
+                lots_str = ", ".join(lots)
+                content.append({"text": f"   Item: {item} → Lot: {lots_str}\n", "tag": "normal"})
                 count += 1
             content.append({"text": "\n", "tag": "normal"})
         
@@ -351,32 +360,36 @@ class PDFCropperApp:
             self.root.update()
             self.extract_invoice_data()
             
-    def extract_invoice_data(self):
+    def extract_invoice_data(self) -> None:
         self.valid_pairs = []
         
         for inv_path in self.invoice_files:
             try:
                 with pdfplumber.open(inv_path) as pdf:
+                    current_item = None
                     for page in pdf.pages:
                         text = page.extract_text()
                         if not text:
                             continue
                         
                         lines = text.split('\n')
-                        current_item = None
-                        
                         for line in lines:
+                            # Reset item context if we reach summary/footer sections
+                            if re.search(r'Subtotal|Total|Page\s+\d+|BIC-Code|IBAN', line, re.IGNORECASE):
+                                current_item = None
+                                
                             item_match = re.match(r'^([0-9][A-Z0-9]+)\s+.+\s+\d+\s+each', line, re.IGNORECASE)
                             if item_match:
-                                current_item = item_match.group(1)
+                                current_item = item_match.group(1).upper()
                             
                             lot_match = re.search(r'Lot Number\s+(\S+)\s+Qty\.', line, re.IGNORECASE)
                             if lot_match and current_item:
-                                lot_number = lot_match.group(1)
-                                pair = (current_item, lot_number)
+                                lot_number = lot_match.group(1).upper()
+                                # current_item is known to be str here due to truthy check
+                                pair = (str(current_item), lot_number)
                                 if pair not in self.valid_pairs:
                                     self.valid_pairs.append(pair)
-                                current_item = None
+                                # current_item is intentionally not reset here to handle multiple lots
                                 
             except Exception as e:
                 print(f"Error reading invoice {inv_path}: {e}")
@@ -419,8 +432,8 @@ class PDFCropperApp:
                     lic_match = re.search(r"Import License No\.:\s*(\S+)", text, re.IGNORECASE)
                     
                     if match:
-                        list_no = match.group(1)
-                        lot_no = match.group(2)
+                        list_no = match.group(1).upper()
+                        lot_no = match.group(2).upper()
                         import_lic = lic_match.group(1) if lic_match else None
                         invoice_valid = (list_no, lot_no) in self.valid_pairs
                         self.validated_labels.append((label_path, list_no, lot_no, import_lic, invoice_valid, None))
